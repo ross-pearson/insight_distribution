@@ -1,0 +1,12 @@
+venv/
+.venv/
+.idea/
+.env
+*/.env
+.vscode/
+**/__pycache__/   
+dashboard_app/cache
+*.pyc
+*.pyo
+__pycache__/
+output/
