@@ -1,0 +1,10 @@
+psycopg2
+python-dotenv
+boto3
+botocore
+fpdf
+Pillow
+requests
+yfinance
+matplotlib
+pdf2image
