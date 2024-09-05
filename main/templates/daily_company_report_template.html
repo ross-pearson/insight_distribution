@@ -1,0 +1,39 @@
+<header>
+    <img src="{{ logo_data_uri }}" alt="Company Logo" class="logo">
+    <h1>{{ company_name }}</h1>
+    <h2>{{ report_title }}</h2>
+</header>
+
+<section>
+    <h3>Company Summary</h3>
+    <p>{{ company_summary }}</p>
+</section>
+
+<section>
+    <h3>Stock Chart</h3>
+    <img src="{{ stock_chart_data_uri }}" alt="Stock Chart">
+</section>
+
+<section>
+    <h3>Recent Activities</h3>
+    <p>{{ recent_activities }}</p>
+</section>
+
+<section>
+    <h3>Industry Overview</h3>
+    <p>{{ industry_overview }}</p>
+</section>
+
+<section>
+    <h3>Media Update and Sentiment</h3>
+    <p>{{ media_update }}</p>
+</section>
+
+<section>
+    <h3>Director Trades</h3>
+    <p>{{ director_trades }}</p>
+</section>
+
+<footer>
+    <p>Generated on {{ generation_date }}</p>
+</footer>

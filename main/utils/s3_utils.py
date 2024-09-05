@@ -32,6 +32,10 @@ class S3Utils:
             return None
 
     def fetch_logo_from_s3(self, asx_code):
+        output_dir = 'output'
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
         session = boto3.Session()
 
         s3 = session.client("s3")

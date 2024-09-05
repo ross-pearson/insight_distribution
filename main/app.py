@@ -1,12 +1,8 @@
 import os
 import logging
-from email.mime.image import MIMEImage
-from email.mime.text import MIMEText
-
-from pdf2image import convert_from_path
-
 from main.utils.db_utils import DbUtils
 from main.utils.s3_utils import S3Utils
+from main.utils.rag_utils import RagUtils
 from main.utils.logger_utils import logger
 from fpdf import FPDF
 import smtplib
@@ -18,14 +14,84 @@ from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 import yfinance as yf
 import matplotlib.pyplot as plt
-import pdf2image
+from jinja2 import Environment, FileSystemLoader, TemplateNotFound
+import pdfkit
+import base64
+from flask import Flask, render_template
 
+app = Flask(__name__)
 
 class ReportGenerator:
-    def __init__(self, s3, db):
+    def __init__(self, s3, db, rag_utils):
+        template_dir = os.path.join(os.getcwd(), 'templates')
+
+        # Check if the template directory exists
+        if not os.path.exists(template_dir):
+            logging.error(f"Template directory does not exist: {template_dir}")
+            raise FileNotFoundError(f"Template directory does not exist: {template_dir}")
+
+        self.env = Environment(loader=FileSystemLoader(template_dir))
         self.s3 = s3
         self.db = db
+        self.rag_utils = rag_utils
         self.logger = logging.getLogger(__name__)
+
+    def render_template_to_pdf(self, templates_with_contexts, output_path):
+        try:
+            # Extract template names
+            cover_template_name = "cover_page_template.html"
+            body_template_name = "daily_company_report_template.html"
+
+            # Extract contexts
+            cover_context = templates_with_contexts.get(cover_template_name)
+            body_context = templates_with_contexts.get(body_template_name)
+
+            if not cover_context:
+                raise ValueError(f"Context for cover template '{cover_template_name}' not provided.")
+            if not body_context:
+                raise ValueError(f"Context for body template '{body_template_name}' not provided.")
+
+            # Encode logo and background images
+            def encode_image(image_path):
+                with open(image_path, "rb") as image_file:
+                    encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+                    return f"data:image/png;base64,{encoded_string}"
+
+            cover_context["dhi_logo"] = encode_image("static/dhi_logo.png")
+            cover_context["background_uri"] = encode_image("static/background.png")
+
+            # Render the cover template
+            self.logger.debug(f"Rendering cover page with template: {cover_template_name}")
+            cover_template = self.env.get_template(cover_template_name)
+            cover_html = cover_template.render(cover_context)
+
+            # Ensure the cover page content ends with a page break
+            cover_html += '<div style="page-break-after: always;"></div>'
+
+            # Render the main body template
+            self.logger.debug(f"Rendering main body with template: {body_template_name}")
+            body_template = self.env.get_template(body_template_name)
+            body_html = body_template.render(body_context)
+
+            # Combine the HTML content
+            combined_html_content = cover_html + body_html
+
+            # Debugging: Log the final combined HTML
+            self.logger.debug(f"Final combined HTML content:\n{combined_html_content}")
+
+            # Generate the PDF from the combined HTML content
+            options = {'enable-local-file-access': None}
+            pdfkit.from_string(combined_html_content, output_path, options=options)
+
+            self.logger.info(f"Generated PDF: {output_path}")
+            return output_path
+
+        except TemplateNotFound as e:
+            self.logger.error(f"Template not found: {e}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Failed to generate PDF: {e}")
+            raise
 
     def generate_pdf(self, report_name='Report', content=None):
         """Generate a PDF with a title page and content pages with images."""
@@ -98,36 +164,11 @@ class ReportGenerator:
                 pdf.set_font("Arial", size=8)
                 pdf.cell(0, 10, f'Page {pdf.page_no()}', 0, 0, 'C')
 
-
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         pdf_filename = f"output/{report_name}_{current_time}.pdf"
         pdf.output(pdf_filename)
         self.logger.info(f"Generated PDF: {pdf_filename}")
         return pdf_filename
-
-    def text_to_image(self, text, width=800, height=600, background_color=(255, 255, 255), text_color=(0, 0, 0), font_path=None, font_size=20):
-        """Convert a given text to an image."""
-        # Create a blank image with a white background
-        image = Image.new('RGB', (width, height), color=background_color)
-        draw = ImageDraw.Draw(image)
-
-        # Load a font
-        if font_path is None:
-            font_path = os.path.join(os.getcwd(), 'static', 'arial.ttf')  # Update to the correct path of the font
-        font = ImageFont.truetype(font_path, font_size)
-
-        # Calculate text size and position using textbbox
-        left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
-        text_width = right - left
-        text_height = bottom - top
-
-        text_x = (width - text_width) // 2
-        text_y = (height - text_height) // 2
-
-        # Draw the text on the image
-        draw.text((text_x, text_y), text, font=font, fill=text_color)
-
-        return image
 
     def wrap_text(self, draw, text, font, max_width):
         """Wrap text to fit within a given width."""
@@ -142,8 +183,38 @@ class ReportGenerator:
                     line += words.pop(0) + ' '
                 else:
                     break
-            lines.append(line)
-        return '\n'.join(lines)
+            lines.append(line.strip())  # Remove trailing space after last word in the line
+        return lines
+
+    def text_to_image(self, text, width=800, height=600, background_color=(255, 255, 255), text_color=(0, 0, 0),
+                      font_path=None, font_size=20):
+        """Convert a given text to an image."""
+        # Create a blank image with a white background
+        image = Image.new('RGB', (width, height), color=background_color)
+        draw = ImageDraw.Draw(image)
+
+        # Load a font
+        if font_path is None:
+            font_path = os.path.join(os.getcwd(), 'static', 'arial.ttf')  # Update to the correct path of the font
+        font = ImageFont.truetype(font_path, font_size)
+
+        # Wrap the text
+        wrapped_lines = self.wrap_text(draw, text, font, max_width=width - 20)  # Leave some padding
+
+        # Calculate the total height needed for the wrapped text
+        total_text_height = sum(
+            draw.textbbox((0, 0), line, font=font)[3] - draw.textbbox((0, 0), line, font=font)[1] for line in
+            wrapped_lines)
+
+        # Start drawing text with vertical centering
+        y = (height - total_text_height) // 2  # Center the text vertically
+        for line in wrapped_lines:
+            text_width, text_height = draw.textbbox((0, 0), line, font=font)[2:4]
+            x = (width - text_width) // 2  # Center the text horizontally
+            draw.text((x, y), line, font=font, fill=text_color)
+            y += text_height  # Move to the next line vertically
+
+        return image
 
     def generate_industry_news_pdf(self, details, industry):
         self.logger.info(f"Generating Industry News PDF for industry: {industry}...")
@@ -156,38 +227,41 @@ class ReportGenerator:
 
         industry_summary2 = f"Summary for {industry}"  # Replace with actual logic to fetch summary
         image2 = self.text_to_image(industry_summary2)
-        image_path2= os.path.join(os.getcwd(), 'output', 'industry_summary.png')
+        image_path2 = os.path.join(os.getcwd(), 'output', 'industry_summary.png')
         image2.save(image_path2)
         content = [image_path, image_path2]
         pdf_filename = self.generate_pdf(report_name='Industry News', content=content)
         os.remove(image_path)
         return pdf_filename
 
-    def generate_daily_company_report_pdf(self, details):
-        self.logger.info("Generating Daily Company Report PDF...")
+    def generate_daily_company_report(self, details):
+        self.logger.info("Generating Daily Company Report...")
 
-        # Extract asx_code from the details dictionary
         asx_code = details
         if not asx_code:
             self.logger.error("ASX code (subscription_value) is missing in the details provided.")
             raise ValueError("ASX code is required to generate the report.")
 
+        # Fetch company summary and details
         results = self.db.get_company_summary(asx_code)
-
         company_summary = results['company_summary']
         company_name = results['company_name']
         logo_path = self.s3.fetch_logo_from_s3(asx_code)
 
         # Load and resize the logo
         logo = Image.open(logo_path)
-        max_logo_width = 100  # Smaller width for the logo
-        max_logo_height = 50   # Smaller height for the logo
+        max_logo_width = 100
+        max_logo_height = 50
         logo.thumbnail((max_logo_width, max_logo_height), Image.LANCZOS)
 
-        # Fetch and plot BHP stock price
-        stock_symbol = f"{asx_code}.AX"  # BHP stock symbol on the ASX
-        stock_data = yf.download(stock_symbol, period="5d", interval="1d")
+        # Convert the company logo to a base64 string to embed in HTML
+        with open(logo_path, "rb") as logo_file:
+            logo_data = base64.b64encode(logo_file.read()).decode('utf-8')
+            logo_data_uri = f"data:image/png;base64,{logo_data}"
 
+        # Fetch and plot the company's stock price
+        stock_symbol = f"{asx_code}.AX"
+        stock_data = yf.download(stock_symbol, period="5d", interval="1d")
         plt.figure(figsize=(8, 4))
         plt.plot(stock_data['Close'], marker='o')
         plt.title(f'{company_name} Stock Price')
@@ -195,64 +269,54 @@ class ReportGenerator:
         plt.ylabel('Price (AUD)')
         plt.grid(True)
 
-        # Save the chart as an image object (in-memory)
-        chart_path = os.path.join(os.getcwd(), 'output', f'{asx_code}_stock_chart.png')
-        plt.savefig(chart_path)
+        # Save the stock chart to a file
+        stock_chart_path = os.path.join(os.getcwd(), 'output', f'{asx_code}_stock_chart.png')
+        plt.savefig(stock_chart_path)
         plt.close()
 
-        chart = Image.open(chart_path)
+        # Convert stock chart to base64
+        with open(stock_chart_path, "rb") as chart_file:
+            chart_data = base64.b64encode(chart_file.read()).decode('utf-8')
+            chart_data_uri = f"data:image/png;base64,{chart_data}"
 
-        # Create a blank canvas with enough height to fit both the summary and the chart
-        image_width = 800
-        summary_height = 400
-        chart_height = 300
-        image_height = summary_height + chart_height + 50  # 50 pixels extra for padding
+        # RAG Queries
+        prompts = [
+            f"Provide me a summary of recent activities, for company: {asx_code}",
+            f"Provide me an industry overview, for company: {asx_code}",
+            f"Provide me a media update and sentiment and reflections, for company: {asx_code}",
+            f"Tell me about recent director trades, for company: {asx_code}"
+        ]
+        rag_responses = [self.rag_utils.ask_question(prompt)[0] for prompt in prompts]
 
-        canvas = Image.new('RGB', (image_width, image_height), color=(255, 255, 255))  # White background
-        draw = ImageDraw.Draw(canvas)
+        # Prepare the template contexts
+        templates_with_contexts = {
+            "cover_page_template.html": {
+                "report_name": f'Daily Company Report: {asx_code}',
+                "company_name": company_name,
+                "generation_date": datetime.now().strftime("%Y-%m-%d")
+            },
+            "daily_company_report_template.html": {
+                "company_name": company_name,
+                "company_summary": company_summary,
+                "logo_data_uri": logo_data_uri,
+                "stock_chart_data_uri": chart_data_uri,
+                "recent_activities": rag_responses[0],
+                "industry_overview": rag_responses[1],
+                "media_update": rag_responses[2],
+                "director_trades": rag_responses[3],
+                "generation_date": datetime.now().strftime("%Y-%m-%d")
+            }
+        }
 
-        # Load fonts
-        font_path = os.path.join(os.getcwd(), 'static', 'arial.ttf')  # Update this path to the correct font path
-        title_font = ImageFont.truetype(font_path, 40)
-        summary_font = ImageFont.truetype(font_path, 20)
+        # Render the templates to a PDF
+        pdf_filename = self.render_template_to_pdf(
+            templates_with_contexts,
+            output_path=os.path.join(os.getcwd(), 'output',
+                                     f"daily_company_report_{asx_code}_{datetime.now().strftime("%Y-%m-%d")}.pdf")
+        )
 
-        # Position the logo and company name on the same line
-        logo_x = 50  # Left margin for the logo
-        logo_y = 50  # Top margin for the logo
-        canvas.paste(logo, (logo_x, logo_y), logo)
-
-        # Calculate the position for the company name
-        text_width, text_height = draw.textbbox((0, 0), company_name, font=title_font)[2:]
-        company_name_x = logo_x + logo.width + 20  # 20 pixels padding between logo and text
-        company_name_y = logo_y + (logo.height - text_height) // 2  # Vertically centered with logo
-
-        draw.text((company_name_x, company_name_y), company_name, font=title_font, fill=(0, 0, 0))
-
-        # Draw a decorative line under the company name
-        line_y = logo_y + logo.height + 20
-        draw.line([(50, line_y), (image_width - 50, line_y)], fill=(0, 0, 0), width=3)
-
-        # Wrap and draw the company summary text
-        summary_y = line_y + 20
-        wrapped_text = self.wrap_text(draw, company_summary, summary_font, image_width - 100)
-        draw.multiline_text((50, summary_y), wrapped_text, font=summary_font, fill=(0, 0, 0))
-
-        # Position the chart below the company summary
-        chart_y = summary_y + 200  # Adjust this value to control spacing between summary and chart
-        canvas.paste(chart, (50, chart_y))
-
-        # Save the final image
-        summary_image_path = os.path.join(os.getcwd(), 'output', f'{asx_code}_summary.png')
-        canvas.save(summary_image_path)
-
-        # Generate the PDF with the combined image
-        content = [summary_image_path]
-        pdf_filename = self.generate_pdf(report_name=f'{asx_code} Daily Company Report', content=content)
-
-        # Clean up the temporary images
-        os.remove(summary_image_path)
-        os.remove(chart_path)
-
+        # Clean up the temporary chart image
+        os.remove(stock_chart_path)
         return pdf_filename
 
     def generate_market_update_pdf(self, details):
@@ -264,6 +328,7 @@ class ReportGenerator:
         logo_path = self.s3.fetch_logo_from_s3(logo_filename)
         pdf_filename = self.generate_pdf(company_summary, logo_path)
         return pdf_filename
+
 
 class ReportSender:
     def __init__(self):
@@ -281,8 +346,8 @@ class ReportSender:
             smtp_port = int(os.environ.get("SMTP_PORT", 587))  # Use Mailchimp's SMTP port
             email_password = os.environ.get("EMAIL_PASSWORD")
         else:  # Default to MailHog
-            smtp_server = os.environ.get("SMTP_SERVER", "localhost")
-            smtp_port = int(os.environ.get("SMTP_PORT", 1025))  # Use MailHog's SMTP port
+            smtp_server = os.environ.get("LOCAL_SMTP_SERVER", "localhost")
+            smtp_port = int(os.environ.get("LOCAL_SMTP_PORT", 1025))  # Use MailHog's SMTP port
             email_password = None  # No password needed for MailHog
 
         # Ensure the file has a .pdf extension
@@ -302,7 +367,6 @@ class ReportSender:
             base_filename = os.path.basename(report_filename)
             part.add_header("Content-Disposition", f'attachment; filename="{base_filename}"')
             msg.attach(part)
-
 
         try:
             with smtplib.SMTP(smtp_server, smtp_port) as server:
@@ -349,11 +413,13 @@ class ReportSender:
             except requests.exceptions.RequestException as e:
                 self.logger.error(f"Failed to publish report {report_filename} to RSS feed {feed}: {e}")
 
+
 def main():
     logger.info("Starting application...")
     db = DbUtils()
     s3 = S3Utils()
-    report_generator = ReportGenerator(s3, db)
+    rag_utils = RagUtils()
+    report_generator = ReportGenerator(s3, db, rag_utils)
     report_sender = ReportSender()
 
     # Fetch distribution lists by preference type first, then by subscription type
@@ -367,13 +433,14 @@ def main():
                 logger.info(f"Processing subscription type: {subscription_type}")
 
                 for subscription_value, emails in subscription_values.items():
-                    logger.info(f"Generating report for subscription type: {subscription_type}, subscription value: {subscription_value}")
+                    logger.info(
+                        f"Generating report for subscription type: {subscription_type}, subscription value: {subscription_value}")
 
                     # Generate the report based on the subscription type and subscription value
                     if subscription_type == "industry news":
                         report_filename = report_generator.generate_industry_news_pdf(subscription_value)
                     elif subscription_type == "daily report":
-                        report_filename = report_generator.generate_daily_company_report_pdf(subscription_value)
+                        report_filename = report_generator.generate_daily_company_report(subscription_value)
                     elif subscription_type == "market update":
                         report_filename = report_generator.generate_market_update_pdf(subscription_value)
                     else:
@@ -381,7 +448,8 @@ def main():
                         continue
 
                     # Send the generated report to each email in the list
-                    logger.info(f"Sending email reports for {subscription_type}, subscription value: {subscription_value}")
+                    logger.info(
+                        f"Sending email reports for {subscription_type}, subscription value: {subscription_value}")
                     report_sender.send_email(report_filename, emails)
 
         elif preference_type == "api":
@@ -401,5 +469,34 @@ def main():
     # Optionally log the distribution for tracking purposes
     logger.info("All reports have been processed and sent.")
 
+
+def encode_image_to_base64(image_path):
+    with open(image_path, "rb") as image_file:
+        encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+    return encoded_string
+
+@app.route('/')
+def render_report():
+    # Paths to images
+    logo_path = "static/dhi_logo.png"
+    background_image_path = "static/background.png"
+
+    # Encode images to base64
+    dhi_logo = encode_image_to_base64(logo_path)
+    background_image_uri = encode_image_to_base64(background_image_path)
+
+    # Prepare the context for the template
+    cover_context = {
+        "report_name": "Daily Company Report: AZS",
+        "company_name": "Company Name Here",
+        "generation_date": datetime.now().strftime("%Y-%m-%d"),
+        "dhi_logo": f"data:image/png;base64,{dhi_logo}",
+        "background_uri": f"data:image/png;base64,{background_image_uri}"
+    }
+
+    return render_template('cover_page_template.html', **cover_context)
+
 if __name__ == "__main__":
+    # using flask just to test HTML
+    # app.run(debug=True)
     main()

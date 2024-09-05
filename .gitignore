@@ -10,3 +10,4 @@ dashboard_app/cache
 *.pyo
 __pycache__/
 output/
+main/rag_cache.pkl

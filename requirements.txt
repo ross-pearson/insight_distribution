@@ -1,4 +1,4 @@
-psycopg2
+psycopg2-binary
 python-dotenv
 boto3
 botocore
@@ -8,3 +8,6 @@ requests
 yfinance
 matplotlib
 pdf2image
+jinja2
+pdfkit
+flask
