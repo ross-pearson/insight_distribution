@@ -1,0 +1,56 @@
+/* Body styling */
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Roboto', sans-serif;
+}
+
+/* Table-based layout for both web and PDF */
+.daily-summary-container table {
+    width: 100%;
+    border-collapse: collapse; /* Ensure no gaps between table cells */
+}
+
+.daily-summary-container td {
+    vertical-align: top;
+    padding: 10px;
+    width: 50%; /* Ensure each column takes 50% of the width */
+    box-sizing: border-box; /* Ensure padding doesn’t affect column width */
+}
+
+/* Ensure the stock chart image fits properly within the table column */
+.daily-summary-container td img {
+    width: 100%; /* Ensure image takes up full width of its column */
+    height: auto; /* Maintain aspect ratio */
+    max-width: 400px; /* Set a reasonable max width */
+    max-height: 200px; /* Set a reasonable max height */
+}
+
+/* Media Update full width */
+.daily-summary-container .media-update-section {
+    width: 100%;
+    margin-top: 20px;
+}
+
+/* Specific section styling */
+.daily-summary-container section {
+    margin-bottom: 20px;
+}
+
+/* Specific heading styling */
+.daily-summary-container h3 {
+    font-size: 1.5em;
+    margin-bottom: 10px;
+}
+
+/* Specific paragraph and list styling */
+.daily-summary-container p, .daily-summary-container ul {
+    font-size: 1em;
+    line-height: 1.5;
+}
+
+/* Ensure that the list items in key updates have better spacing and layout */
+.daily-summary-container ul {
+    padding-left: 20px;
+    list-style-type: disc;
+}

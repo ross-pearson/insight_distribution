@@ -85,25 +85,53 @@ class DbUtils:
             raise DatabaseError("No Document Urls found in db for the given external ids!!")
         return sql_results
 
-    def get_company_director_trades_by_asx_code(self, asx_code):
-        logger.info(f"Fetching company director trades for ASX code: {asx_code}...")
+    def get_director_trades(self, asx_code=None, date_from=None, date_to=None):
+        logger.info(f"Fetching director trades for ASX code: {asx_code if asx_code else 'All companies'}, from date: {date_from if date_from else 'No start date'}, to date: {date_to if date_to else 'No end date'}...")
 
         query = """
-            SELECT daa.external_id, daa.structured_text
-            FROM disclosure.disclosure_attributes_annotations AS daa
-            INNER JOIN disclosure.disclosure AS d
-            ON daa.disclosure_id = d.disclosure_id 
-            AND daa.attribute_id = '47bcf56f-19bf-403f-b491-21493f72b16c'
-            INNER JOIN disclosure.company AS c
-            ON d.company_id = c.company_id
-            WHERE c.asx_code = %s;
+            WITH LatestRecords AS (
+                SELECT 
+                    d.publish_date,
+                    daa.external_id, 
+                    daa.structured_text,
+                    daa.run_date,
+                    d.disclosure_id,
+                    c.asx_code,
+                    ROW_NUMBER() OVER (PARTITION BY d.disclosure_id ORDER BY daa.run_date DESC) AS rn
+                FROM disclosure.disclosure_attributes_annotations AS daa
+                INNER JOIN disclosure.disclosure AS d
+                    ON daa.disclosure_id = d.disclosure_id
+                    AND daa.attribute_id = '47bcf56f-19bf-403f-b491-21493f72b16c'
+                INNER JOIN disclosure.company AS c
+                    ON d.company_id = c.company_id
+                WHERE (%s IS NULL OR c.asx_code = %s)
         """
 
-        # Execute the query with the passed asx_code
-        sql_results = self.select_all(query, (asx_code,))
+        # Initialize params for the query
+        params = [asx_code, asx_code]
+
+        # Add the date_from condition if provided
+        if date_from:
+            query += " AND d.publish_date >= %s"
+            params.append(date_from)
+
+        # Add the date_to condition if provided
+        if date_to:
+            query += " AND d.publish_date <= %s"
+            params.append(date_to)
+
+        query += """
+            )
+            SELECT external_id, structured_text
+            FROM LatestRecords
+            WHERE rn = 1;
+        """
+
+        sql_results = self.select_all(query, tuple(params))
+
         if not sql_results:
-            logger.info(f"No director trades found in the database for ASX code: {asx_code}!")
-            raise DatabaseError(f"No director trades found in the database for ASX code: {asx_code}!")
+            logger.info(f"No director trades found in the database for the given criteria!")
+            return None
 
         # Create a DataFrame from the results
         df = pd.DataFrame(sql_results, columns=['external_id', 'structured_text'])
@@ -117,6 +145,11 @@ class DbUtils:
         # Combine the external_id with the expanded structured_text
         result_df = pd.concat([df[['external_id']], structured_text_df], axis=1)
 
+        # Rename the columns to replace underscores with spaces and capitalize each word
+        result_df.columns = [
+            ' '.join([word if word.isupper() else word.capitalize() for word in col.replace('_', ' ').split()])
+            for col in result_df.columns
+        ]
         return result_df
 
 

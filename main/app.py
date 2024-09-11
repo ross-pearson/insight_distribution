@@ -1,3 +1,4 @@
+import json
 import os
 import logging
 import pandas as pd
@@ -10,14 +11,16 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import yfinance as yf
 import matplotlib.pyplot as plt
 from jinja2 import Environment, FileSystemLoader, TemplateNotFound
 import pdfkit
 import base64
-from flask import Flask, render_template, request, jsonify, redirect, render_template_string
+from flask import Flask, render_template, request, jsonify, redirect
 import threading
+import matplotlib.dates as mdates
+import re
 
 app = Flask(__name__)
 subscription_lock = threading.Lock()
@@ -39,7 +42,7 @@ REPORT_TYPES = {
     },
     'director_trades': {
         'report_id': 'director_trades',
-        'report_name': 'Director Trades Report',
+        'report_name': 'Changes in Director Interests',
         'report_function': 'generate_director_trades_report',
         'report_html': 'director_trades_report_template.html',
         'report_css': 'director_trades_report.css'
@@ -67,6 +70,27 @@ class ReportGenerator:
         with open(image_path, "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
             return f"data:image/png;base64,{encoded_string}"
+
+    @staticmethod
+    def parse_json(json_string):
+        """
+        Parses a JSON string and returns a Python dictionary.
+        If the string is empty or invalid, it logs a notice and returns an empty dictionary.
+
+        :param json_string:
+        :return: Parsed dictionary or empty dictionary
+        """
+        if not json_string:
+            logger.info("Details provided are empty.")
+            return {}
+
+        try:
+            # Attempt to parse the JSON string into a dictionary
+            return json.loads(json_string)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid JSON format: {e}")
+            return {}
+
 
     def render_template_to_html_and_pdf(self, report_data, output_path):
         try:
@@ -158,7 +182,16 @@ class ReportGenerator:
     def generate_daily_company_report(self, details):
         self.logger.info("Generating Daily Company Report...")
         report_info = REPORT_TYPES.get('daily_report')
-        asx_code = details
+        # Parse the details JSON string
+        try:
+            details_dict = self.parse_json(details)
+        except ValueError as e:
+            self.logger.error(f"Error in parsing details: {e}")
+            raise
+
+        # Extract the ASX code
+        asx_code = details_dict.get('asx_code')
+
         if not asx_code:
             self.logger.error("ASX code (subscription_value) is missing in the details provided.")
             raise ValueError("ASX code is required to generate the report.")
@@ -172,24 +205,50 @@ class ReportGenerator:
         # Fetch and plot the company's stock price
         stock_symbol = f"{asx_code}.AX"
         stock_data = yf.download(stock_symbol, period="5d", interval="1d")
-        plt.figure(figsize=(8, 4))
-        plt.plot(stock_data['Close'], marker='o')
-        plt.title(f'{company_name} Stock Price')
-        plt.xlabel('Date')
-        plt.ylabel('Price (AUD)')
-        plt.grid(True)
+        last_price = stock_data['Close'][-1]
+        previous_price = stock_data['Close'][-2]
+        percentage_change = ((last_price - previous_price) / previous_price) * 100
+        line_color = 'blue' if last_price > previous_price else 'red'
 
-        # Save the stock chart to a file
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(stock_data['Close'], color=line_color, linewidth=2)
+        ax.fill_between(stock_data.index, stock_data['Close'], color=line_color, alpha=0.1)
+        ax.plot(stock_data.index[-1], last_price, marker='o', color=line_color, markersize=8)
+        ax.grid(True, which='major', axis='y', linestyle='--', linewidth=0.5, color='gray')
+        ax.set_xlabel('')
+        ax.set_ylabel('Price (AUD)', fontsize=12)
+        plt.xticks(rotation=45)
+
+        plt.figtext(0.15, 0.92, f'{company_name} ({asx_code})', fontsize=16, weight='bold', ha='left')
+        plt.figtext(0.15, 0.86, f'${last_price:.2f}', fontsize=24, weight='bold', ha='left')
+        change_color = 'green' if percentage_change > 0 else 'red'
+        percentage_text = f'{percentage_change:.2f}%'
+        box_props = dict(boxstyle="round,pad=0.3", facecolor=change_color, edgecolor=change_color)
+        plt.figtext(0.32, 0.86, percentage_text, fontsize=16, color='white', ha='left', bbox=box_props)
+
+        plt.subplots_adjust(top=0.8)
         stock_chart_path = os.path.join(os.getcwd(), 'output', f'{asx_code}_stock_chart.png')
-        plt.savefig(stock_chart_path)
+        plt.savefig(stock_chart_path, dpi=300, bbox_inches='tight')
         plt.close()
 
         # RAG Queries
         prompts = [
             f"Provide me a summary of recent activities, for company: {asx_code}",
-            f"Provide me an industry overview, for company: {asx_code}",
             f"Provide me a media update and sentiment and reflections, for company: {asx_code}",
-            f"Tell me about recent director trades, for company: {asx_code}"
+            f"Tell me about recent director trades, for company: {asx_code}",
+            f"Summarize key activities disclosed by {asx_code} over the last 7 days in a bullet-point list. "
+            "Focus on:\n\n"
+            " - Financial updates\n"
+            " - Product or service launches\n"
+            " - Strategic initiatives (e.g., mergers, acquisitions)\n"
+            " - Operational changes (e.g., leadership, restructuring)\n"
+            " - Market activity (e.g., stock buybacks, investments)\n"
+            " - Regulatory updates\n"
+            " - Sustainability actions\n"
+            " - Partnerships\n"
+            " - Customer announcements\n"
+            " - Industry recognition\n\n"
+            "Present each as a separate bullet point, and skip categories with no updates."
         ]
         rag_responses = [self.rag_utils.ask_question(prompt)[0] for prompt in prompts]
 
@@ -208,15 +267,16 @@ class ReportGenerator:
                 "company_summary": company_summary,
                 "company_logo": self.encode_image(company_logo_path),
                 "stock_chart": self.encode_image(stock_chart_path),
-                "recent_activities": rag_responses[0],
-                "industry_overview": rag_responses[1],
-                "media_update": rag_responses[2],
-                "director_trades": rag_responses[3],
+                "recent_activities":  self.format_rag_response(rag_responses[0]),
+                "media_update": self.format_rag_response(rag_responses[1]),
+                "director_trades":  self.format_rag_response(rag_responses[2]),
+                "key_updates": self.format_rag_response(rag_responses[3]),
                 "generation_date": datetime.now().strftime("%Y-%m-%d"),
                 "body_css": report_info['report_css']
             }
         }
 
+        print (self.format_rag_response(rag_responses[3]))
         # Render the templates to a PDF
         pdf_filename, report_html = self.render_template_to_html_and_pdf(
             report_data,
@@ -228,32 +288,107 @@ class ReportGenerator:
         os.remove(stock_chart_path)
         return pdf_filename, report_html
 
+
+    def format_rag_response(self, rag_response):
+        """
+        Cleans up inconsistent Markdown-like formatting and converts it into structured HTML.
+        Removes only the first line if it's a top-level title and formats the remaining content into HTML.
+        Handles headers, bold text, lists, and ensures proper paragraph spacing.
+        Returns a well-formatted HTML string.
+        """
+
+        # Strip the first line if it looks like a top-level title (e.g., bold or header text)
+        rag_response = re.sub(r'^\s*(#|\*\*|##|###).*\n', '', rag_response, count=1)
+
+        # Normalize headers: convert any remaining `#`, `##`, etc., to <h2> and <h3> tags
+        cleaned_response = re.sub(r'^\s*#{1,2}\s+(.*)', r'<h2>\1</h2>', rag_response, flags=re.MULTILINE)
+        cleaned_response = re.sub(r'^\s*#{3,6}\s+(.*)', r'<h3>\1</h3>', cleaned_response, flags=re.MULTILINE)
+
+        # Normalize bold and italic: convert `**text**` or `__text__` to <strong> and `*text*` or `_text_` to <em>
+        cleaned_response = re.sub(r'(\*\*|__)(.*?)\1', r'<strong>\2</strong>', cleaned_response)  # Bold to <strong>
+        cleaned_response = re.sub(r'(\*|_)(.*?)\1', r'<em>\2</em>', cleaned_response)            # Italic to <em>
+
+        # Convert unordered and ordered lists into <ul><li> (both numbered and bullet lists)
+        cleaned_response = re.sub(r'^\s*[\*\-\+]\s+(.*)', r'<li>\1</li>', cleaned_response, flags=re.MULTILINE)  # Unordered lists
+        cleaned_response = re.sub(r'^\s*\d+\.\s+(.*)', r'<li>\1</li>', cleaned_response, flags=re.MULTILINE)     # Numbered lists
+
+        # Wrap consecutive <li> items in <ul> tags for bullet points
+        cleaned_response = re.sub(r'(<li>.*?</li>)', r'<ul>\1</ul>', cleaned_response, flags=re.DOTALL)
+
+        # Ensure paragraphs are properly separated: replace multiple newlines with <p> tags
+        cleaned_response = re.sub(r'\n{2,}', '</p><p>', cleaned_response)
+
+        # Wrap the entire content in a <div> and ensure it starts with a <p> tag
+        cleaned_response = f'<div><p>{cleaned_response}</p></div>'
+
+        # Clean up any excessive spaces or empty tags
+        cleaned_response = re.sub(r'\s+', ' ', cleaned_response)  # Remove extra spaces
+        cleaned_response = re.sub(r'<p>\s*</p>', '', cleaned_response)  # Remove empty paragraphs
+
+        return cleaned_response
+
+
     def generate_director_trades_report(self, details):
-        self.logger.info("Generating Market Update PDF...")
+        self.logger.info("Generating Director Trade Report...")
         report_info = REPORT_TYPES.get('director_trades')
-        asx_code = details
+        try:
+            details_dict = self.parse_json(details)
+        except ValueError as e:
+            self.logger.error(f"Error in parsing details: {e}")
+            raise
+
+        # Extract the ASX code, default to 'ASX' if missing
+        asx_code = details_dict.get('asx_code')
+        is_company_specific = True
         if not asx_code:
-            self.logger.error("ASX code (subscription_value) is missing in the details provided.")
-            raise ValueError("ASX code is required to generate the report.")
+            company_name = 'ALL'
+            asx_code = 'ASX'
+            is_company_specific = False
+        else:
+            # Fetch company summary and details
+            results = self.db.get_company_summary(asx_code)
+            company_name = results['company_name']
 
-        # Fetch company summary and details
-        results = self.db.get_company_summary(asx_code)
-        company_summary = results['company_summary']
-        company_name = results['company_name']
-        company_logo_path = self.s3.fetch_logo_from_s3(asx_code)
+        try:
+            company_logo_path = self.s3.fetch_logo_from_s3(asx_code)
+        except Exception as e:
+            self.logger.warning(f"Company logo for {asx_code} not found: {e}")
+            company_logo_path = None
 
+        date_from = details_dict.get('date_from')
+        date_to = details_dict.get('date_to')
+        frequency = details_dict.get('frequency')
+
+        db_params = {}
+        if is_company_specific:
+            db_params['asx_code'] = asx_code
+        if date_from:
+            db_params['date_from'] = date_from
+        if date_to:
+            db_params['date_to'] = date_to
+        if frequency:
+            frequency = int(frequency)
+            db_params['date_from'] = datetime.now() - timedelta(days=frequency)
+            db_params['date_to'] = datetime.now()
         # Fetch data and drop unnecessary columns
-        director_trades_raw = self.db.get_company_director_trades_by_asx_code('BHP').drop(
-            columns=['indirect_interest_nature', 'ABN', 'change_nature'])
+        director_trades_raw = self.db.get_director_trades(**db_params)
 
-        # Convert 'date_of_change' to datetime, errors='coerce' will set invalid parsing to NaT (Not a Time)
-        director_trades_raw['date_of_change'] = pd.to_datetime(director_trades_raw['date_of_change'], errors='coerce')
+        if director_trades_raw is None or director_trades_raw.empty:
+            # Log a notice if no records are found and handle it gracefully
+            self.logger.info("No director trades found for the given criteria.")
+            director_trades_html = "<p>No director trades available for the selected criteria.</p>"
+        else:
+            # Drop unnecessary columns
+            director_trades_raw = director_trades_raw.drop(columns=['Indirect Interest Nature', 'ABN', 'Change Nature'])
 
-        # Now sort by 'date_of_change' in descending order
-        director_trades_raw = director_trades_raw.sort_values(by='date_of_change', ascending=False)
+            # Convert 'date_of_change' to datetime, errors='coerce' will set invalid parsing to NaT (Not a Time)
+            director_trades_raw['Date Of Change'] = pd.to_datetime(director_trades_raw['Date Of Change'], errors='coerce')
 
-        # Convert to HTML for rendering
-        director_trades_html = director_trades_raw.to_html(classes='dataframe', index=False)
+            # Sort by 'date_of_change' in descending order
+            director_trades_raw = director_trades_raw.sort_values(by='Date Of Change', ascending=False)
+
+            # Convert to HTML for rendering
+            director_trades_html = director_trades_raw.to_html(classes='dataframe', index=False)
 
         report_data = {
             "report_header": {
@@ -266,7 +401,6 @@ class ReportGenerator:
             },
             "report_body": {
                 "template_name":  report_info['report_html'],
-                "company_summary": company_summary,
                 "company_logo": self.encode_image(company_logo_path),
                 "director_trades": director_trades_html,
                 "generation_date": datetime.now().strftime("%Y-%m-%d"),
@@ -382,6 +516,8 @@ def list_subscriptions():
 
 
 @app.route('/report/<subscription_type>/<subscription_value>')
+@app.route('/report/<subscription_type>/', defaults={'subscription_value': None})
+@app.route('/report/<subscription_type>', defaults={'subscription_value': None})
 def view_report(subscription_type, subscription_value):
     report_generator = ReportGenerator(S3Utils(), DbUtils(), RagUtils())
 
@@ -521,7 +657,6 @@ def add_customer():
 @app.route('/run_subscriptions', methods=['POST'])
 def run_subscriptions_endpoint():
     # Check if the lock is already acquired (i.e., another subscription process is running)
-    print("TREST")
     if subscription_lock.locked():
         return jsonify({'success': False, 'message': 'Subscriptions are already running.'}), 400
 
@@ -529,7 +664,6 @@ def run_subscriptions_endpoint():
     with subscription_lock:
         try:
             # Run the subscription process
-            print("TREST2")
             run_subscriptions()
             return jsonify({'success': True, 'message': 'Subscriptions are running.'}), 200
         except Exception as e:

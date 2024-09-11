@@ -97,15 +97,16 @@
 
             cells.forEach((cell, index) => {
                 if (index === 1) {  // For Preference Type column (first column)
-                    const currentValue = cell.textContent;
+                    const currentValue = cell.textContent || cell.innerText;
 
                     const select = document.createElement('select');
                     preferenceTypes.forEach(preference_type => {
                         const option = document.createElement('option');
                         option.value = preference_type;
                         option.textContent = preference_type;
-                        if (currentValue === preference_type) {
-                            option.selected = true;  // Set the current value as selected
+
+                        if (currentValue.trim().toLowerCase() === preference_type.toLowerCase()) {
+                            option.selected = true;
                         }
                         select.appendChild(option);
                     });
@@ -126,7 +127,7 @@
                         const option = document.createElement('option');
                         option.value = report_id;
                         option.textContent = report_id;
-                        if (currentValue === report_id) {
+                        if (currentValue.trim().toLowerCase() === report_id.toLowerCase()) {
                             option.selected = true;  // Set the current value as selected
                         }
                         select.appendChild(option);

@@ -1,34 +1,31 @@
+<div class="daily-summary-container">
+    <section>
+        <h3>Company Summary</h3>
+        <p>{{ report_body.company_summary }}</p>
+    </section>
 
+    <!-- Table for Stock Chart and Key Updates -->
+    <table>
+        <tr>
+            <td>
+                <h3>Stock Chart</h3>
+                <img src="{{ report_body.stock_chart }}" alt="Stock Chart">
+            </td>
+            <td>
+                <h3>Key Updates</h3>
+                {{ report_body.key_updates }}
+            </td>
+        </tr>
+    </table>
 
-<div style="height: 80vh; overflow-y: auto;">
-<section>
-    <h3>Company Summary</h3>
-    <p>{{ report_body.company_summary }}</p>
-</section>
+    <!-- Media Update Full Width -->
+    <section class="media-update-section">
+        <h3>Media Update and Sentiment</h3>
+        <p>{{ report_body.media_update }}</p>
+    </section>
 
-<section>
-    <h3>Stock Chart</h3>
-    <img src="{{ report_body.stock_chart }}" alt="Stock Chart">
-</section>
-
-<section>
-    <h3>Recent Activities</h3>
-    <p>{{ report_body.recent_activities }}</p>
-</section>
-
-<section>
-    <h3>Industry Overview</h3>
-    <p>{{ report_body.industry_overview }}</p>
-</section>
-
-<section>
-    <h3>Media Update and Sentiment</h3>
-    <p>{{ report_body.media_update }}</p>
-</section>
-
-<section>
-    <h3>Director Trades</h3>
-    <p>{{ report_body.director_trades }}</p>
-</section>
-
+    <section>
+        <h3>Director Trades</h3>
+        <p>{{ report_body.director_trades }}</p>
+    </section>
 </div>
