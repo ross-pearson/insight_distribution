@@ -1,0 +1,35 @@
+.main_report table {
+    border-collapse: collapse;
+    margin: 25px 0;
+    font-size: 0.9em;
+    font-family: sans-serif;
+    min-width: 400px;
+}
+
+.main_report table thead tr {
+    background-color: black;
+    color: #ffffff;
+    text-align: left;
+}
+
+.main_report table th,
+.main_report table td {
+    padding: 12px 15px;
+}
+
+.main_report table tbody tr {
+    border-bottom: 1px solid #dddddd;
+}
+
+.main_report table tbody tr:nth-of-type(even) {
+    background-color: #f3f3f3;
+}
+
+.main_report table tbody tr:last-of-type {
+    border-bottom: 2px solid black;
+}
+
+.main_report table tbody tr.active-row {
+    font-weight: bold;
+    color: #009879;
+}

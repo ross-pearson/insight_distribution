@@ -1,0 +1,222 @@
+/* General body styling */
+body {
+    font-family: 'Roboto', sans-serif;
+    background-color: #1e1e1e;
+    color: #dcdcdc;
+    margin: 0;
+    padding: 20px;
+}
+
+/* Styling for the table */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    background-color: #2c2c2c;
+    margin-bottom: 20px;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0px 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+th, td {
+    padding: 15px;
+    text-align: left;
+    border-bottom: 1px solid #3c3c3c;
+    color: #dcdcdc;
+}
+
+th {
+    background-color: #3b3b3b;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 0.9em;
+    color: #f0f0f0;
+}
+
+td {
+    background-color: #2c2c2c;
+    color: #dcdcdc;
+    font-size: 0.85em;
+}
+
+/* Styling for selected row */
+tr.selected {
+    background-color: #007acc !important;  /* Brighter background color */
+    color: #ffffff !important;  /* White text for better contrast */
+}
+
+/* Hover effect for rows */
+tr:hover {
+    background-color: #333333 !important;  /* Ensure this hover color is visible */
+    transition: background-color 0.2s ease;
+    cursor: pointer;
+}
+
+/* Prioritize hover over selected */
+tr.selected:hover {
+    background-color: #333333 !important;  /* Ensure hover still works when selected */
+}
+
+/* Ensure buttons inside the selected row remain visible */
+tr.selected button {
+    background-color: #005f99 !important;  /* Slightly darker button to keep it distinct */
+    color: white;
+}
+
+tr.selected button:hover {
+    background-color: #004080 !important;  /* Adjust hover state for selected row's buttons */
+}
+
+
+button {
+    background-color: #007acc;
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.8em;
+    transition: background-color 0.2s ease;
+    width: 80px;
+}
+
+button:hover {
+    background-color: #005f99;
+}
+
+/* Modal styling */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 100;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.75);
+    overflow: hidden;
+}
+
+.modal-content {
+    background-color: #2c2c2c;
+    margin: 10% auto;
+    padding: 20px;
+    border-radius: 8px;
+    width: 60%;
+    max-width: 600px;
+    box-shadow: 0px 4px 20px rgba(0, 0, 0, 0.7);
+    border: 1px solid #3c3c3c;
+    color: #f0f0f0;
+}
+
+/* Close button for modal */
+.close {
+    float: right;
+    font-size: 1.5em;
+    font-weight: bold;
+    color: #f0f0f0;
+    cursor: pointer;
+    transition: color 0.2s ease;
+}
+
+.close:hover,
+.close:focus {
+    color: #ff5c5c;
+}
+
+/* Form elements inside modal */
+label {
+    font-size: 0.9em;
+    color: #dcdcdc;
+    display: block;
+    margin-bottom: 8px;
+}
+
+input[type="text"], select {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 20px;
+    background-color: #3c3c3c;
+    border: 1px solid #5c5c5c;
+    border-radius: 5px;
+    color: #f0f0f0;
+    font-size: 1em;
+    outline: none;
+}
+
+input[type="text"]:focus, select:focus {
+    border-color: #007acc;
+}
+
+button[type="submit"] {
+    background-color: #007acc;
+    color: white;
+    border: none;
+    padding: 12px 20px;
+    font-size: 1em;
+    cursor: pointer;
+    border-radius: 5px;
+    transition: background-color 0.2s ease;
+}
+
+button[type="submit"]:hover {
+    background-color: #005f99;
+}
+
+.material-icons {
+    font-size: 24px;  /* Adjust size */
+    color: #dcdcdc;   /* Adjust color */
+    vertical-align: middle;  /* Align with text if needed */
+}
+
+/* Scrollbar customization */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background-color: #2c2c2c;
+}
+
+::-webkit-scrollbar-thumb {
+    background-color: #555;
+    border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background-color: #888;
+}
+
+/* Smooth transitions */
+* {
+    transition: all 0.2s ease;
+}
+
+/* Default state for the report_link */
+a.report_link {
+    display: inline-block;
+    padding: 10px 20px;
+    font-size: 16px;
+    text-decoration: none;
+    color: white;
+    background-color: #009879; /* Button color */
+    border-radius: 5px;        /* Rounded corners */
+    transition: background-color 0.3s ease; /* Smooth transition */
+}
+
+/* Hover state for the report_link */
+a.report_link:hover {
+    background-color: #007b5f; /* Darker green on hover */
+    color: white;              /* Keep text white on hover */
+}
+
+/* Visited state (after click) */
+a.report_link:visited {
+    color: white;              /* Keep text white after visiting */
+    background-color: #009879; /* Same background color as default */
+}
+
+/* Active state (while clicking) */
+a.report_link:active {
+    background-color: #005b3f; /* Darkest green when clicking */
+}

@@ -1,25 +1,51 @@
 import os
 import logging
+import pandas as pd
 from main.utils.db_utils import DbUtils
 from main.utils.s3_utils import S3Utils
 from main.utils.rag_utils import RagUtils
 from main.utils.logger_utils import logger
-from fpdf import FPDF
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 import requests
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageFont
 import yfinance as yf
 import matplotlib.pyplot as plt
 from jinja2 import Environment, FileSystemLoader, TemplateNotFound
 import pdfkit
 import base64
-from flask import Flask, render_template
+from flask import Flask, render_template, request, jsonify, redirect, render_template_string
+import threading
 
 app = Flask(__name__)
+subscription_lock = threading.Lock()
+
+REPORT_TYPES = {
+    'industry_news': {
+        'report_id': 'industry_news',
+        'report_name': 'Industry News Report',
+        'report_function': 'generate_industry_news_report',
+        'report_html': 'industry_news_report_template.html',
+        'report_css': 'industry_news_report.css'
+    },
+    'daily_report': {
+        'report_id': 'daily_report',
+        'report_name': 'Daily Company Report',
+        'report_function': 'generate_daily_company_report',
+        'report_html': 'daily_company_report_template.html',
+        'report_css': 'daily_company_report.css'
+    },
+    'director_trades': {
+        'report_id': 'director_trades',
+        'report_name': 'Director Trades Report',
+        'report_function': 'generate_director_trades_report',
+        'report_html': 'director_trades_report_template.html',
+        'report_css': 'director_trades_report.css'
+    }
+}
+
 
 class ReportGenerator:
     def __init__(self, s3, db, rag_utils):
@@ -36,207 +62,102 @@ class ReportGenerator:
         self.rag_utils = rag_utils
         self.logger = logging.getLogger(__name__)
 
-    def render_template_to_pdf(self, templates_with_contexts, output_path):
+    @staticmethod
+    def encode_image(image_path):
+        with open(image_path, "rb") as image_file:
+            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+            return f"data:image/png;base64,{encoded_string}"
+
+    def render_template_to_html_and_pdf(self, report_data, output_path):
         try:
-            # Extract template names
-            cover_template_name = "cover_page_template.html"
-            body_template_name = "daily_company_report_template.html"
+            # Extract the report header and body template names from the report_data structure
+            report_header_template_name = report_data.get("report_header", {}).get("template_name")
+            body_template_name = report_data.get("report_body", {}).get("template_name")
 
-            # Extract contexts
-            cover_context = templates_with_contexts.get(cover_template_name)
-            body_context = templates_with_contexts.get(body_template_name)
+            if not report_header_template_name:
+                raise ValueError("No report header template name provided in the report data.")
+            if not body_template_name:
+                raise ValueError("No report body template name provided in the report data.")
 
-            if not cover_context:
-                raise ValueError(f"Context for cover template '{cover_template_name}' not provided.")
-            if not body_context:
-                raise ValueError(f"Context for body template '{body_template_name}' not provided.")
+            # Encode images (e.g., DHI logo)
+            report_data["dhi_logo"] = self.encode_image("static/dhi_logo.png")
 
-            # Encode logo and background images
-            def encode_image(image_path):
-                with open(image_path, "rb") as image_file:
-                    encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-                    return f"data:image/png;base64,{encoded_string}"
+            report_data['static_url'] = lambda filename: f"/static/{filename}"
 
-            cover_context["dhi_logo"] = encode_image("static/dhi_logo.png")
-            cover_context["background_uri"] = encode_image("static/background.png")
+            # Render the master template (header) with the entire report_data, including the body data
+            self.logger.debug(f"Rendering master template with embedded template: {report_header_template_name}")
+            master_template = self.env.get_template(report_header_template_name)
 
-            # Render the cover template
-            self.logger.debug(f"Rendering cover page with template: {cover_template_name}")
-            cover_template = self.env.get_template(cover_template_name)
-            cover_html = cover_template.render(cover_context)
+            final_html_content = master_template.render(report_data)
 
-            # Ensure the cover page content ends with a page break
-            cover_html += '<div style="page-break-after: always;"></div>'
+            # Debugging: Log the final HTML content
+            self.logger.debug(f"Final HTML content:\n{final_html_content}")
 
-            # Render the main body template
-            self.logger.debug(f"Rendering main body with template: {body_template_name}")
-            body_template = self.env.get_template(body_template_name)
-            body_html = body_template.render(body_context)
+            # Extract report orientation from the report_data
+            report_orientation = report_data.get("report_header", {}).get("report_orientation", "Portrait")
 
-            # Combine the HTML content
-            combined_html_content = cover_html + body_html
+            # Generate the PDF from the final HTML content
+            options = {
+                'enable-local-file-access': None,
+                'orientation': report_orientation
+            }
+            static_folder = os.path.join(os.getcwd(), 'static')
+            stylesheets = [
+                os.path.join(static_folder, report_data["report_header"]["header_css"]),
+                os.path.join(static_folder, report_data["report_body"]["body_css"])
+            ]
 
-            # Debugging: Log the final combined HTML
-            self.logger.debug(f"Final combined HTML content:\n{combined_html_content}")
-
-            # Generate the PDF from the combined HTML content
-            options = {'enable-local-file-access': None}
-            pdfkit.from_string(combined_html_content, output_path, options=options)
+            pdfkit.from_string(final_html_content, output_path, options=options, css=stylesheets)
 
             self.logger.info(f"Generated PDF: {output_path}")
-            return output_path
+            return output_path, final_html_content
 
         except TemplateNotFound as e:
             self.logger.error(f"Template not found: {e}")
+            raise
+        except FileNotFoundError as e:
+            self.logger.error(f"File not found: {e}")
             raise
         except Exception as e:
             self.logger.error(f"Failed to generate PDF: {e}")
             raise
 
-    def generate_pdf(self, report_name='Report', content=None):
-        """Generate a PDF with a title page and content pages with images."""
-        pdf = FPDF()
-        pdf.set_auto_page_break(auto=True, margin=15)
+    def generate_industry_news_report(self, details):
+        self.logger.info(f"Generating Industry News report: {details}...")
+        report_info = REPORT_TYPES.get('industry_news')
+        industry_code = details
+        if not industry_code:
+            self.logger.error("Industry code (subscription_value) is missing in the details provided.")
+            raise ValueError("Industry code is required to generate the report.")
 
-        # Title Page
-        pdf.add_page()
+        #results = self.db.get_industry_data(industry_code)
 
-        # Background Image
-        background_image = 'static/background.png'
-        if os.path.exists(background_image):
-            pdf.image(background_image, x=0, y=0, w=210, h=297)  # Full A4 size
+        report_data = {
+            "report_header": {
+                "template_name": "report_header.html",
+                "report_name": f'{report_info['report_name']}: {industry_code}',
+                "generation_date": datetime.now().strftime("%Y-%m-%d"),
+                "report_orientation": "Portrait",
+                "header_css": 'report_header.css'
+            },
+            "report_body": {
+                "template_name":  report_info['report_html'],
+                "generation_date": datetime.now().strftime("%Y-%m-%d"),
+                "body_css": report_info['report_css']
+            }
+        }
 
-        # White Box (80% of the page, centered)
-        white_box_width = 210 * 0.8  # 80% of page width
-        white_box_height = 297 * 0.8  # 80% of page height
-        white_box_x = (210 - white_box_width) / 2  # Centered horizontally
-        white_box_y = (297 - white_box_height) / 2  # Centered vertically
-
-        pdf.set_fill_color(255, 255, 255)  # White color
-        pdf.rect(white_box_x, white_box_y, white_box_width, white_box_height, 'F')
-
-        # Company Logo inside the White Box
-        logo_path = 'static/dhi_logo.png'
-        if os.path.exists(logo_path):
-            pdf.image(logo_path, x=white_box_x + 10, y=white_box_y + 10, w=30)  # Adjust size and position as needed
-
-        # Title Box inside the White Box
-        black_box_width = white_box_width * 0.8  # 80% of the white box width
-        black_box_x = white_box_x  # Flush with the left side of the white box
-        black_box_y = white_box_y + 60
-        pdf.set_fill_color(0, 0, 0)  # Black color
-        pdf.rect(black_box_x, black_box_y, black_box_width, 60, 'F')  # Position and size of the black box
-
-        # Title Text inside the Black Box
-        pdf.set_font("Arial", size=24)
-        pdf.set_text_color(255, 255, 255)  # White text
-        pdf.set_xy(black_box_x, black_box_y)
-        pdf.cell(black_box_width, 60, report_name.upper(), 0, 1, 'C')
-
-        # Company Information inside the White Box (left-aligned with padding)
-        text_padding = white_box_x + 20  # 100px padding from the left
-        pdf.set_text_color(0, 0, 0)  # Black text
-        pdf.set_font("Arial", size=12)
-        pdf.set_xy(text_padding, black_box_y + 80)
-        pdf.cell(0, 10, "DHI-AI Pty Ltd", 0, 1, 'L')
-        pdf.set_x(text_padding)
-        pdf.cell(0, 10, datetime.now().strftime("%B %d, %Y"), 0, 1, 'L')
-        pdf.set_x(text_padding)
-        pdf.cell(0, 10, "website: dhi-ai.com", 0, 1, 'L')
-        pdf.set_x(text_padding)
-        pdf.cell(0, 10, "email: info@dhi-ai.com", 0, 1, 'L')
-
-        # Content Pages
-        if content:
-            for index, image_data in enumerate(content, start=1):
-                pdf.add_page()
-
-                # Add header with report name
-                pdf.set_font("Arial", size=16)
-                pdf.set_y(10)  # Ensure the header is at the top
-                pdf.cell(0, 10, report_name, 0, 1, 'C')
-
-                # Add image
-                pdf.image(image_data, x=10, y=20, w=190)  # Adjust image position to leave space for the header
-
-                # Manually position footer at the bottom without causing a new page break
-                pdf.set_y(-25)  # Move 25 units up from the bottom (15 for the text height, 10 for margin)
-                pdf.set_font("Arial", size=8)
-                pdf.cell(0, 10, f'Page {pdf.page_no()}', 0, 0, 'C')
-
-        current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-        pdf_filename = f"output/{report_name}_{current_time}.pdf"
-        pdf.output(pdf_filename)
-        self.logger.info(f"Generated PDF: {pdf_filename}")
-        return pdf_filename
-
-    def wrap_text(self, draw, text, font, max_width):
-        """Wrap text to fit within a given width."""
-        lines = []
-        words = text.split()
-        while words:
-            line = ''
-            while words:
-                word = words[0]
-                left, top, right, bottom = draw.textbbox((0, 0), line + word + ' ', font=font)
-                if right - left <= max_width:
-                    line += words.pop(0) + ' '
-                else:
-                    break
-            lines.append(line.strip())  # Remove trailing space after last word in the line
-        return lines
-
-    def text_to_image(self, text, width=800, height=600, background_color=(255, 255, 255), text_color=(0, 0, 0),
-                      font_path=None, font_size=20):
-        """Convert a given text to an image."""
-        # Create a blank image with a white background
-        image = Image.new('RGB', (width, height), color=background_color)
-        draw = ImageDraw.Draw(image)
-
-        # Load a font
-        if font_path is None:
-            font_path = os.path.join(os.getcwd(), 'static', 'arial.ttf')  # Update to the correct path of the font
-        font = ImageFont.truetype(font_path, font_size)
-
-        # Wrap the text
-        wrapped_lines = self.wrap_text(draw, text, font, max_width=width - 20)  # Leave some padding
-
-        # Calculate the total height needed for the wrapped text
-        total_text_height = sum(
-            draw.textbbox((0, 0), line, font=font)[3] - draw.textbbox((0, 0), line, font=font)[1] for line in
-            wrapped_lines)
-
-        # Start drawing text with vertical centering
-        y = (height - total_text_height) // 2  # Center the text vertically
-        for line in wrapped_lines:
-            text_width, text_height = draw.textbbox((0, 0), line, font=font)[2:4]
-            x = (width - text_width) // 2  # Center the text horizontally
-            draw.text((x, y), line, font=font, fill=text_color)
-            y += text_height  # Move to the next line vertically
-
-        return image
-
-    def generate_industry_news_pdf(self, details, industry):
-        self.logger.info(f"Generating Industry News PDF for industry: {industry}...")
-
-        # Example logic to fetch industry summary
-        industry_summary = f"Summary for {industry}"  # Replace with actual logic to fetch summary
-        image = self.text_to_image(industry_summary)
-        image_path = os.path.join(os.getcwd(), 'output', 'industry_summary.png')
-        image.save(image_path)
-
-        industry_summary2 = f"Summary for {industry}"  # Replace with actual logic to fetch summary
-        image2 = self.text_to_image(industry_summary2)
-        image_path2 = os.path.join(os.getcwd(), 'output', 'industry_summary.png')
-        image2.save(image_path2)
-        content = [image_path, image_path2]
-        pdf_filename = self.generate_pdf(report_name='Industry News', content=content)
-        os.remove(image_path)
-        return pdf_filename
+        # Render the templates to HTML and PDF
+        pdf_filename, report_html = self.render_template_to_html_and_pdf(
+            report_data,
+            output_path=os.path.join(os.getcwd(), 'output',
+                                     f"industry_news_report_{industry_code}_{datetime.now().strftime("%Y-%m-%d")}.pdf")
+        )
+        return pdf_filename, report_html
 
     def generate_daily_company_report(self, details):
         self.logger.info("Generating Daily Company Report...")
-
+        report_info = REPORT_TYPES.get('daily_report')
         asx_code = details
         if not asx_code:
             self.logger.error("ASX code (subscription_value) is missing in the details provided.")
@@ -246,18 +167,7 @@ class ReportGenerator:
         results = self.db.get_company_summary(asx_code)
         company_summary = results['company_summary']
         company_name = results['company_name']
-        logo_path = self.s3.fetch_logo_from_s3(asx_code)
-
-        # Load and resize the logo
-        logo = Image.open(logo_path)
-        max_logo_width = 100
-        max_logo_height = 50
-        logo.thumbnail((max_logo_width, max_logo_height), Image.LANCZOS)
-
-        # Convert the company logo to a base64 string to embed in HTML
-        with open(logo_path, "rb") as logo_file:
-            logo_data = base64.b64encode(logo_file.read()).decode('utf-8')
-            logo_data_uri = f"data:image/png;base64,{logo_data}"
+        company_logo_path = self.s3.fetch_logo_from_s3(asx_code)
 
         # Fetch and plot the company's stock price
         stock_symbol = f"{asx_code}.AX"
@@ -274,11 +184,6 @@ class ReportGenerator:
         plt.savefig(stock_chart_path)
         plt.close()
 
-        # Convert stock chart to base64
-        with open(stock_chart_path, "rb") as chart_file:
-            chart_data = base64.b64encode(chart_file.read()).decode('utf-8')
-            chart_data_uri = f"data:image/png;base64,{chart_data}"
-
         # RAG Queries
         prompts = [
             f"Provide me a summary of recent activities, for company: {asx_code}",
@@ -289,45 +194,93 @@ class ReportGenerator:
         rag_responses = [self.rag_utils.ask_question(prompt)[0] for prompt in prompts]
 
         # Prepare the template contexts
-        templates_with_contexts = {
-            "cover_page_template.html": {
-                "report_name": f'Daily Company Report: {asx_code}',
+        report_data = {
+            "report_header": {
+                "template_name": "report_header.html",
+                "report_name": f'{report_info['report_name']}: {company_name} [{asx_code}]',
                 "company_name": company_name,
-                "generation_date": datetime.now().strftime("%Y-%m-%d")
+                "generation_date": datetime.now().strftime("%Y-%m-%d"),
+                "report_orientation": "Portrait",
+                "header_css":  'report_header.css'
             },
-            "daily_company_report_template.html": {
-                "company_name": company_name,
+            "report_body": {
+                "template_name":  report_info['report_html'],
                 "company_summary": company_summary,
-                "logo_data_uri": logo_data_uri,
-                "stock_chart_data_uri": chart_data_uri,
+                "company_logo": self.encode_image(company_logo_path),
+                "stock_chart": self.encode_image(stock_chart_path),
                 "recent_activities": rag_responses[0],
                 "industry_overview": rag_responses[1],
                 "media_update": rag_responses[2],
                 "director_trades": rag_responses[3],
-                "generation_date": datetime.now().strftime("%Y-%m-%d")
+                "generation_date": datetime.now().strftime("%Y-%m-%d"),
+                "body_css": report_info['report_css']
             }
         }
 
         # Render the templates to a PDF
-        pdf_filename = self.render_template_to_pdf(
-            templates_with_contexts,
+        pdf_filename, report_html = self.render_template_to_html_and_pdf(
+            report_data,
             output_path=os.path.join(os.getcwd(), 'output',
                                      f"daily_company_report_{asx_code}_{datetime.now().strftime("%Y-%m-%d")}.pdf")
         )
 
         # Clean up the temporary chart image
         os.remove(stock_chart_path)
-        return pdf_filename
+        return pdf_filename, report_html
 
-    def generate_market_update_pdf(self, details):
+    def generate_director_trades_report(self, details):
         self.logger.info("Generating Market Update PDF...")
-        # Placeholder for market update generation logic
-        asx_code = 'ASX'  # Example ASX code; replace with logic specific to market updates
-        company_summary = 'placeholder'
-        logo_filename = "ASX"  # Replace with actual logo filename
-        logo_path = self.s3.fetch_logo_from_s3(logo_filename)
-        pdf_filename = self.generate_pdf(company_summary, logo_path)
-        return pdf_filename
+        report_info = REPORT_TYPES.get('director_trades')
+        asx_code = details
+        if not asx_code:
+            self.logger.error("ASX code (subscription_value) is missing in the details provided.")
+            raise ValueError("ASX code is required to generate the report.")
+
+        # Fetch company summary and details
+        results = self.db.get_company_summary(asx_code)
+        company_summary = results['company_summary']
+        company_name = results['company_name']
+        company_logo_path = self.s3.fetch_logo_from_s3(asx_code)
+
+        # Fetch data and drop unnecessary columns
+        director_trades_raw = self.db.get_company_director_trades_by_asx_code('BHP').drop(
+            columns=['indirect_interest_nature', 'ABN', 'change_nature'])
+
+        # Convert 'date_of_change' to datetime, errors='coerce' will set invalid parsing to NaT (Not a Time)
+        director_trades_raw['date_of_change'] = pd.to_datetime(director_trades_raw['date_of_change'], errors='coerce')
+
+        # Now sort by 'date_of_change' in descending order
+        director_trades_raw = director_trades_raw.sort_values(by='date_of_change', ascending=False)
+
+        # Convert to HTML for rendering
+        director_trades_html = director_trades_raw.to_html(classes='dataframe', index=False)
+
+        report_data = {
+            "report_header": {
+                "template_name": "report_header.html",
+                "report_name": f'{report_info['report_name']}: {company_name} [{asx_code}]',
+                "company_name": company_name,
+                "generation_date": datetime.now().strftime("%Y-%m-%d"),
+                "report_orientation": "Portrait",
+                "header_css": 'report_header.css'
+            },
+            "report_body": {
+                "template_name":  report_info['report_html'],
+                "company_summary": company_summary,
+                "company_logo": self.encode_image(company_logo_path),
+                "director_trades": director_trades_html,
+                "generation_date": datetime.now().strftime("%Y-%m-%d"),
+                "body_css": report_info['report_css']
+            }
+        }
+
+        # Render the templates to HTML and PDF
+        pdf_filename, report_html = self.render_template_to_html_and_pdf(
+            report_data,
+            output_path=os.path.join(os.getcwd(), 'output',
+                                     f"director_trades_report_{asx_code}_{datetime.now().strftime("%Y-%m-%d")}.pdf")
+        )
+        return pdf_filename, report_html
 
 
 class ReportSender:
@@ -414,14 +367,182 @@ class ReportSender:
                 self.logger.error(f"Failed to publish report {report_filename} to RSS feed {feed}: {e}")
 
 
-def main():
-    logger.info("Starting application...")
+#Flask end points for viewing reports
+@app.route('/')
+def list_subscriptions():
+    db = DbUtils()
+    subscriptions = db.get_distribution_preferences()
+    customers = db.get_customers()
+
+    # Extract report_ids from the REPORT_TYPES dictionary
+    report_ids = [report['report_id'] for report in REPORT_TYPES.values()]
+
+    return render_template('subscriptions.html', subscriptions=subscriptions, report_ids=report_ids,
+                           customers=customers)
+
+
+@app.route('/report/<subscription_type>/<subscription_value>')
+def view_report(subscription_type, subscription_value):
+    report_generator = ReportGenerator(S3Utils(), DbUtils(), RagUtils())
+
+    # Fetch the report details from the REPORT_TYPES dictionary
+    report_info = REPORT_TYPES.get(subscription_type)
+
+    # Check if the subscription_type exists in REPORT_TYPES
+    if not report_info:
+        return f"Unknown subscription type: {subscription_type}", 400
+
+    # Dynamically call the appropriate report function
+    report_function = getattr(report_generator, report_info['report_function'])
+
+    # Generate the report by calling the function dynamically
+    pdf_filename, report_html = report_function(subscription_value)
+
+    # Return the HTML content directly, not using render_template_string
+    return report_html
+
+
+@app.route('/toggle_preference_active', methods=['POST'])
+def toggle_preference_active():
+    """
+    Toggle the is_active status of a preference.
+    Expects a POST request with JSON payload containing 'preference_id' and 'is_active'.
+    """
+    db_utils = DbUtils()
+    try:
+        data = request.get_json()
+
+        # Extract preference_id and is_active from the JSON payload
+        preference_id = data.get('preference_id')
+        is_active = data.get('is_active')
+
+        if preference_id is None or is_active is None:
+            return jsonify({"error": "Invalid request payload"}), 400
+
+        # Call the DB function to toggle the activation status
+        new_status = db_utils.toggle_preference_active(preference_id, is_active)
+
+        # Return the new status in the response
+        return jsonify({"preference_id": preference_id, "new_status": new_status}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/save_preference', methods=['POST'])
+def save_preference():
+    """
+    Endpoint to save the updated preference details.
+    Expects a POST request with JSON payload containing the updated preference data.
+    """
+    db_utils = DbUtils()
+    data = request.get_json()
+
+    # Ensure all necessary fields are provided
+    required_fields = ['preference_id', 'preference_type', 'preference_value', 'subscription_type',
+                       'subscription_value', 'is_active']
+    if not all(field in data for field in required_fields):
+        return jsonify({"error": "Invalid request, missing fields"}), 400
+
+    try:
+        # Call the database update function
+        db_utils.update_preference(
+            data['preference_id'],
+            data['preference_type'],
+            data['preference_value'],
+            data['subscription_type'],
+            data['subscription_value'],
+            data['is_active']
+        )
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/delete_preference', methods=['POST'])
+def delete_preference():
+    """
+    Endpoint to delete a preference.
+    Expects a POST request with JSON payload containing the preference_id.
+    """
+    db_utils = DbUtils()
+    data = request.get_json()
+
+    # Ensure preference_id is provided
+    if 'preference_id' not in data:
+        return jsonify({"error": "Invalid request, 'preference_id' is required"}), 400
+
+    try:
+        # Call the database delete function
+        db_utils.delete_preference(data['preference_id'])
+        return jsonify({"success": True, "message": "Preference deleted successfully"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/save_new_subscription', methods=['POST'])
+def save_new_subscription():
+    customer_id = request.form['customer_id']
+    preference_type = request.form['preference_type']
+    preference_value = request.form['preference_value']
+    subscription_type = request.form['subscription_type']
+    subscription_value = request.form['subscription_value']
+    is_active = request.form['is_active']
+
+    # Insert into the database (you can implement the logic in DbUtils)
+    db = DbUtils()
+    db.insert_new_subscription(customer_id, preference_type, preference_value, subscription_type, subscription_value,
+                               is_active)
+
+    return redirect('/')  # Redirect back to the subscription list page
+
+
+@app.route('/add_customer', methods=['POST'])
+def add_customer():
+    db_utils = DbUtils()
+    data = request.get_json()
+
+    first_name = data.get('first_name')
+    last_name = data.get('last_name')
+    email = data.get('email')
+
+    if not all([first_name, last_name, email]):
+        return jsonify({'success': False, 'message': 'Missing data. Please provide all required fields.'}), 400
+
+    # Add customer to the database and get the result
+    result = db_utils.add_customer(first_name, last_name, email)
+
+    if result['success']:
+        return jsonify({'success': True, 'message': result['message']}), 200
+    else:
+        return jsonify({'success': False, 'message': result['message']}), 400
+
+
+@app.route('/run_subscriptions', methods=['POST'])
+def run_subscriptions_endpoint():
+    # Check if the lock is already acquired (i.e., another subscription process is running)
+    print("TREST")
+    if subscription_lock.locked():
+        return jsonify({'success': False, 'message': 'Subscriptions are already running.'}), 400
+
+    # Acquire the lock to prevent concurrent execution
+    with subscription_lock:
+        try:
+            # Run the subscription process
+            print("TREST2")
+            run_subscriptions()
+            return jsonify({'success': True, 'message': 'Subscriptions are running.'}), 200
+        except Exception as e:
+            return jsonify({'success': False, 'message': f"Failed to run subscriptions: {str(e)}"}), 500
+
+
+def run_subscriptions():
     db = DbUtils()
     s3 = S3Utils()
     rag_utils = RagUtils()
     report_generator = ReportGenerator(s3, db, rag_utils)
     report_sender = ReportSender()
-
+    print(f"Processing reports for preference type: TEST")
     # Fetch distribution lists by preference type first, then by subscription type
     distribution_lists = db.get_distribution_lists_by_subscription()
 
@@ -436,16 +557,15 @@ def main():
                     logger.info(
                         f"Generating report for subscription type: {subscription_type}, subscription value: {subscription_value}")
 
-                    # Generate the report based on the subscription type and subscription value
-                    if subscription_type == "industry news":
-                        report_filename = report_generator.generate_industry_news_pdf(subscription_value)
-                    elif subscription_type == "daily report":
-                        report_filename = report_generator.generate_daily_company_report(subscription_value)
-                    elif subscription_type == "market update":
-                        report_filename = report_generator.generate_market_update_pdf(subscription_value)
-                    else:
+                    report_info = REPORT_TYPES.get(subscription_type)
+
+                    if not report_info:
                         logger.warning(f"Unknown subscription type: {subscription_type}")
                         continue
+                    report_function = getattr(report_generator, report_info['report_function'])
+
+                    # Generate the report
+                    report_filename, _ = report_function(subscription_value)
 
                     # Send the generated report to each email in the list
                     logger.info(
@@ -470,33 +590,17 @@ def main():
     logger.info("All reports have been processed and sent.")
 
 
-def encode_image_to_base64(image_path):
-    with open(image_path, "rb") as image_file:
-        encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-    return encoded_string
+def main():
+    logger.info("Starting application...")
+    view_mode = os.environ.get("VIEW_MODE", "False").lower() == "true"
+    flask_port = os.environ.get("FLASK_PORT", "5000")
 
-@app.route('/')
-def render_report():
-    # Paths to images
-    logo_path = "static/dhi_logo.png"
-    background_image_path = "static/background.png"
+    if view_mode:
+        # Start the Flask server
+        app.run(debug=True, port=flask_port)
+    else:
+        run_subscriptions()
 
-    # Encode images to base64
-    dhi_logo = encode_image_to_base64(logo_path)
-    background_image_uri = encode_image_to_base64(background_image_path)
-
-    # Prepare the context for the template
-    cover_context = {
-        "report_name": "Daily Company Report: AZS",
-        "company_name": "Company Name Here",
-        "generation_date": datetime.now().strftime("%Y-%m-%d"),
-        "dhi_logo": f"data:image/png;base64,{dhi_logo}",
-        "background_uri": f"data:image/png;base64,{background_image_uri}"
-    }
-
-    return render_template('cover_page_template.html', **cover_context)
 
 if __name__ == "__main__":
-    # using flask just to test HTML
-    # app.run(debug=True)
     main()

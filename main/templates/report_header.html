@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ report_name }}</title>
+    <link rel="stylesheet" href="/static/{{ report_header.header_css }}">
+    <link rel="stylesheet" href="/static/{{ report_body.body_css }}">
+    <link rel="icon" href="{{ static_url('favicon.ico') }}" type="image/x-icon">
+</head>
+<body>
+<!-- Table for logo, title, and company info in the header -->
+<table class="header-table">
+    <tr>
+        {% if report_body.company_logo %}
+        <td>
+            <img src="{{ report_body.company_logo }}" alt="Company Logo" class="logo">
+        </td>
+        {% endif %}
+        <td>
+            <div class="title-box-wrapper">
+                <div class="title-box">
+                    {{ report_header.report_name.upper() }}
+                </div>
+            </div>
+        </td>
+    </tr>
+</table>
+
+{% include report_body.template_name with context %}
+
+<footer>
+    <table class="footer-table">
+        <tr>
+            <!-- DHI Logo on the left -->
+            <td style="width: 10%;">
+                <img src="{{ dhi_logo }}" alt="Company Logo" class="logo">
+            </td>
+
+            <td>
+                 Generated on {{ report_header.generation_date }}
+            </td>
+
+            <!-- Company info on the right -->
+            <td style="width: 10%;">
+                <div class="company-info">
+                    <p>DHI-AI Pty Ltd</p>
+                    <p>{{ current_date }}</p>
+                    <p>website: dhi-ai.com</p>
+                    <p>email: info@dhi-ai.com</p>
+                </div>
+            </td>
+        </tr>
+    </table>
+</footer>
+</body>
+</html>

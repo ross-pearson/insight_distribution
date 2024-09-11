@@ -5,7 +5,6 @@ from main.utils.logger_utils import logger
 from main.utils.custom_error_utils import S3Error
 from PIL import Image
 
-
 class S3Utils:
     def __init__(self):
         self.bucket_name = os.environ.get("S3_PUBLIC_BUCKET", "dhi-disclosures-public-dev")
@@ -36,12 +35,17 @@ class S3Utils:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-        session = boto3.Session()
+        # Paths for the logo
+        converted_logo_file = f"output/{asx_code}.png"
 
+        # Check if the logo already exists locally
+        if os.path.exists(converted_logo_file):
+            return converted_logo_file
+
+        session = boto3.Session()
         s3 = session.client("s3")
         s3_logo_name = f"company_logo/{asx_code}.ico"
         temp_logo_file = f"output/{asx_code}.ico"
-        converted_logo_file = f"output/{asx_code}.png"
 
         try:
             # Download the .ico file from S3
@@ -49,12 +53,18 @@ class S3Utils:
 
             # Convert .ico file to .png using Pillow
             with Image.open(temp_logo_file) as img:
+                # Resize the logo before saving
+                max_logo_width = 100
+                max_logo_height = 50
+                img.thumbnail((max_logo_width, max_logo_height), Image.LANCZOS)
                 img.save(converted_logo_file, format='PNG')
 
             # Remove the .ico file after conversion
             os.remove(temp_logo_file)
 
+            # Return the path to the resized logo
             return converted_logo_file
+
         except botocore.exceptions.ClientError as error:
             if error.response["Error"]["Code"] == "404":
                 logger.warning(f"Logo not found in S3: {s3_logo_name}. Proceeding with no logo.")
