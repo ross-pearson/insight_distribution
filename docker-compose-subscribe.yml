@@ -3,8 +3,8 @@ services:
     image: mailhog/mailhog:latest
     container_name: mailhog
     ports:
-      - "8025:8025"  # Expose HTTP access for MailHog UI
-      - "1025:1025"  # Expose SMTP port for MailHog
+      - "8025:8025"
+      - "1025:1025"
     networks:
       - insights-network
 
@@ -13,11 +13,8 @@ services:
     container_name: insights
     depends_on:
       - mailhog
-    environment:
-      - SMTP_SERVER=mailhog
-      - SMTP_PORT=1025
-      - EMAIL_SENDER=youremail@example.com
-      - EMAIL_PROVIDER=mailhog
+    env_file:
+      - subscribe.env
     networks:
       - insights-network
     volumes:

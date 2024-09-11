@@ -4,6 +4,18 @@ FROM python:3.9-slim
 # Set the working directory in the container
 WORKDIR /app
 
+# Install dependencies needed for wkhtmltopdf
+RUN apt-get update && apt-get install -y \
+    wkhtmltopdf \
+    libxrender1 \
+    libxext6 \
+    libfontconfig1 \
+    libfreetype6 \
+    xfonts-75dpi \
+    xfonts-base \
+    --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy the requirements.txt file into the container
 COPY requirements.txt .
 
@@ -15,5 +27,6 @@ COPY . .
 
 ENV PYTHONPATH "${PYTHONPATH}:/app"
 
+WORKDIR /app/main
 # Command to run the application
-CMD ["python", "main/app.py"]
+CMD ["python", "app.py"]

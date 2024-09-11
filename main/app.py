@@ -159,7 +159,7 @@ class ReportGenerator:
         report_data = {
             "report_header": {
                 "template_name": "report_header.html",
-                "report_name": f'{report_info['report_name']}: {industry_code}',
+                "report_name": f"{report_info['report_name']}: {industry_code}",
                 "generation_date": datetime.now().strftime("%Y-%m-%d"),
                 "report_orientation": "Portrait",
                 "header_css": 'report_header.css'
@@ -175,7 +175,7 @@ class ReportGenerator:
         pdf_filename, report_html = self.render_template_to_html_and_pdf(
             report_data,
             output_path=os.path.join(os.getcwd(), 'output',
-                                     f"industry_news_report_{industry_code}_{datetime.now().strftime("%Y-%m-%d")}.pdf")
+                                     f"industry_news_report_{industry_code}_{datetime.now().strftime('%Y-%m-%d')}.pdf")
         )
         return pdf_filename, report_html
 
@@ -219,15 +219,15 @@ class ReportGenerator:
         ax.set_ylabel('Price (AUD)', fontsize=12)
         plt.xticks(rotation=45)
 
-        plt.figtext(0.15, 0.92, f'{company_name} ({asx_code})', fontsize=16, weight='bold', ha='left')
-        plt.figtext(0.15, 0.86, f'${last_price:.2f}', fontsize=24, weight='bold', ha='left')
+        plt.figtext(0.15, 0.92, f"{company_name} ({asx_code})", fontsize=16, weight='bold', ha='left')
+        plt.figtext(0.15, 0.86, f"${last_price:.2f}", fontsize=24, weight='bold', ha='left')
         change_color = 'green' if percentage_change > 0 else 'red'
-        percentage_text = f'{percentage_change:.2f}%'
+        percentage_text = f"{percentage_change:.2f}%"
         box_props = dict(boxstyle="round,pad=0.3", facecolor=change_color, edgecolor=change_color)
         plt.figtext(0.32, 0.86, percentage_text, fontsize=16, color='white', ha='left', bbox=box_props)
 
         plt.subplots_adjust(top=0.8)
-        stock_chart_path = os.path.join(os.getcwd(), 'output', f'{asx_code}_stock_chart.png')
+        stock_chart_path = os.path.join(os.getcwd(), 'output', f"{asx_code}_stock_chart.png")
         plt.savefig(stock_chart_path, dpi=300, bbox_inches='tight')
         plt.close()
 
@@ -256,7 +256,7 @@ class ReportGenerator:
         report_data = {
             "report_header": {
                 "template_name": "report_header.html",
-                "report_name": f'{report_info['report_name']}: {company_name} [{asx_code}]',
+                "report_name": f"{report_info['report_name']}: {company_name} [{asx_code}]",
                 "company_name": company_name,
                 "generation_date": datetime.now().strftime("%Y-%m-%d"),
                 "report_orientation": "Portrait",
@@ -281,7 +281,7 @@ class ReportGenerator:
         pdf_filename, report_html = self.render_template_to_html_and_pdf(
             report_data,
             output_path=os.path.join(os.getcwd(), 'output',
-                                     f"daily_company_report_{asx_code}_{datetime.now().strftime("%Y-%m-%d")}.pdf")
+                                     f"daily_company_report_{asx_code}_{datetime.now().strftime('%Y-%m-%d')}.pdf")
         )
 
         # Clean up the temporary chart image
@@ -319,7 +319,7 @@ class ReportGenerator:
         cleaned_response = re.sub(r'\n{2,}', '</p><p>', cleaned_response)
 
         # Wrap the entire content in a <div> and ensure it starts with a <p> tag
-        cleaned_response = f'<div><p>{cleaned_response}</p></div>'
+        cleaned_response = f"<div><p>{cleaned_response}</p></div>"
 
         # Clean up any excessive spaces or empty tags
         cleaned_response = re.sub(r'\s+', ' ', cleaned_response)  # Remove extra spaces
@@ -393,7 +393,7 @@ class ReportGenerator:
         report_data = {
             "report_header": {
                 "template_name": "report_header.html",
-                "report_name": f'{report_info['report_name']}: {company_name} [{asx_code}]',
+                "report_name": f"{report_info['report_name']}: {company_name} [{asx_code}]",
                 "company_name": company_name,
                 "generation_date": datetime.now().strftime("%Y-%m-%d"),
                 "report_orientation": "Portrait",
@@ -412,7 +412,7 @@ class ReportGenerator:
         pdf_filename, report_html = self.render_template_to_html_and_pdf(
             report_data,
             output_path=os.path.join(os.getcwd(), 'output',
-                                     f"director_trades_report_{asx_code}_{datetime.now().strftime("%Y-%m-%d")}.pdf")
+                                     f"director_trades_report_{asx_code}_{datetime.now().strftime('%Y-%m-%d')}.pdf")
         )
         return pdf_filename, report_html
 
@@ -421,7 +421,7 @@ class ReportSender:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
 
-    def send_email(self, report_filename, recipients):
+    def send_email(self, email_title, report_filename, recipients):
         """Send email with the report as a PDF attachment."""
         self.logger.info(f"Preparing to send email report {report_filename} to {len(recipients)} recipients...")
 
@@ -442,7 +442,7 @@ class ReportSender:
             report_filename += '.pdf'
 
         msg = MIMEMultipart()
-        msg['Subject'] = "Your Report"
+        msg['Subject'] = email_title
         msg['From'] = email_sender
         msg['To'] = ", ".join(recipients)
 
@@ -452,7 +452,7 @@ class ReportSender:
             part.set_payload(attachment.read())
             encoders.encode_base64(part)
             base_filename = os.path.basename(report_filename)
-            part.add_header("Content-Disposition", f'attachment; filename="{base_filename}"')
+            part.add_header("Content-Disposition", f"attachment; filename='{base_filename}'")
             msg.attach(part)
 
         try:
@@ -692,6 +692,7 @@ def run_subscriptions():
                         f"Generating report for subscription type: {subscription_type}, subscription value: {subscription_value}")
 
                     report_info = REPORT_TYPES.get(subscription_type)
+                    email_title = 'DHI Report Subscription: ' + report_info['report_name'] + " for " + datetime.now().strftime("%d %B %Y")
 
                     if not report_info:
                         logger.warning(f"Unknown subscription type: {subscription_type}")
@@ -704,7 +705,7 @@ def run_subscriptions():
                     # Send the generated report to each email in the list
                     logger.info(
                         f"Sending email reports for {subscription_type}, subscription value: {subscription_value}")
-                    report_sender.send_email(report_filename, emails)
+                    report_sender.send_email(email_title, report_filename, emails)
 
         elif preference_type == "api":
             logger.info(f"Processing API reports for preference type: {preference_type}")
@@ -727,11 +728,11 @@ def run_subscriptions():
 def main():
     logger.info("Starting application...")
     view_mode = os.environ.get("VIEW_MODE", "False").lower() == "true"
-    flask_port = os.environ.get("FLASK_PORT", "5000")
-
+    flask_port = int(os.environ.get("FLASK_PORT", "5000"))
+    print (flask_port)
     if view_mode:
         # Start the Flask server
-        app.run(debug=True, port=flask_port)
+        app.run(debug=True, host="0.0.0.0", port=flask_port)
     else:
         run_subscriptions()
 

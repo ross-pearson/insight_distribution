@@ -1,0 +1,27 @@
+services:
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: mailhog
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    networks:
+      - insights-network
+
+  insights:
+    build: .
+    container_name: insights-flask
+    environment:
+      - FLASK_APP=main/app.py
+    env_file:
+      - flask.env
+    ports:
+      - "6001:6001"
+    networks:
+      - insights-network
+    volumes:
+      - ./main/output:/app/main/output
+
+networks:
+  insights-network:
+    driver: bridge

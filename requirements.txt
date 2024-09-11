@@ -11,5 +11,4 @@ pdf2image
 jinja2~=3.1.4
 pdfkit~=1.0.0
 flask~=3.0.3
-psycopg2~=2.9.9
 pandas~=2.2.2
